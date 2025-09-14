@@ -5,25 +5,25 @@
   <title>Audacity Labels / Audition Markers Converter</title>
   <style>
     body {
-			font-family: sans-serif;
-			padding: 20px;
-		}
+      font-family: sans-serif;
+      padding: 20px;
+    }
 
-		.top {
-			margin-bottom: 20px; /* space between header and panels */
-		}
+    .top {
+      margin-bottom: 20px; /* space between header and panels */
+    }
 
-		.main {
-			display: flex;
-			gap: 20px;
-		}
+    .main {
+      display: flex;
+      gap: 20px;
+    }
 
-		.panel {
-			flex: 1;
-			display: flex;
-			flex-direction: column;
-			gap: 10px;
-	  }
+    .panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
     textarea { width: 100%; height: 300px; font-family: monospace; }
     .info { font-weight: bold; }
     .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -34,7 +34,7 @@
     <h1>Audacity Labels / Audition Markers Converter</h1>
     <p>Note: only Decimal time format / Cue type Audition Marker format supported</p>
   </div>
-	<div class="main">
+  <div class="main">
   <div class="panel left">
     <h3>Input</h3>
     <textarea id="input"></textarea>
@@ -97,11 +97,12 @@ function identify(autoSelectRadio=false) {
   infoEl.textContent = 'Identified as ' + detectedFormat;
   if (autoSelectRadio) {
     const val = detectedFormat === 'audacity' ? 'audition' : 'audacity';
-    document.querySelector(`input[name="target"][value="${val}"]`).checked = true;
+    const radio = document.querySelector(`input[name="target"][value="${val}"]`);
+    if (radio) radio.checked = true;
   }
 }
 
-document.getElementById('identifyBtn').addEventListener('click', () => identify(false));
+document.getElementById('identifyBtn').addEventListener('click', () => identify(true));
 
 document.getElementById('convertBtn').addEventListener('click', () => {
   const text = inputEl.value.trim();
@@ -139,10 +140,15 @@ function audacityToAudition(txt) {
   const lines = txt.split(/\r?\n/).filter(l => l.trim());
   const out = ["Name\tStart\tDuration\tTime Format\tType\tDescription"];
   for (let line of lines) {
-    const [start, end, label=""] = line.split("\t");
-    const s = parseFloat(start);
-    const e = parseFloat(end);
-    if (isNaN(s) || isNaN(e)) throw new Error('Invalid timestamps');
+    // Match: two floats at the start, then the rest (tabs or spaces tolerated)
+    const m = line.match(/^(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)(?:\s+(.*))?$/);
+    if (!m) throw new Error("Invalid line: " + line);
+
+    const s = parseFloat(m[1]);
+    const e = parseFloat(m[2]);
+    const label = m[3] || "";
+
+    if (isNaN(s) || isNaN(e)) throw new Error("Invalid timestamps: " + line);
     const duration = e - s;
     const fmtTime = sec => {
       const ms = Math.round(sec * 1000);
@@ -153,9 +159,39 @@ function audacityToAudition(txt) {
       return `${hh>0?hh+':':''}${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}.${mmm.toString().padStart(3,'0')}`;
     };
     const esc = str => '"' + str.replace(/"/g,'""') + '"';
-    out.push([esc(label), fmtTime(s), fmtTime(duration), 'decimal', 'Cue', ''].join("\t"));
+    //out.push([esc(label), fmtTime(s), fmtTime(duration), 'decimal', 'Cue', ''].join("\t"));
+		// Keep original decimal precision
+    out.push([esc(label), m[1], (parseFloat(m[2]) - parseFloat(m[1])).toFixed(6), 'decimal', 'Cue', ''].join("\t"));
+
   }
   return out.join("\n");
+}
+
+// Robust TSV parser that supports quoted fields and escaped quotes (""
+function parseTsvLine(line) {
+  const fields = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuotes && line[i+1] === '"') {
+        // Escaped quote, add one quote and skip next
+        field += '"';
+        i++;
+      } else {
+        // Toggle inQuotes (don't include the quote char)
+        inQuotes = !inQuotes;
+      }
+    } else if (c === '\t' && !inQuotes) {
+      fields.push(field);
+      field = '';
+    } else {
+      field += c;
+    }
+  }
+  fields.push(field);
+  return fields;
 }
 
 function auditionToAudacity(txt) {
@@ -163,42 +199,36 @@ function auditionToAudacity(txt) {
   if (!lines[0].startsWith('Name\tStart')) throw new Error('Not an Audition TSV');
   const out = [];
   for (let i=1; i<lines.length; i++) {
-    // Handle quoted fields properly (TSV with quotes)
-    let parts = [];
-    let current = '';
-    let inQuotes = false;
-    for (let c of lines[i]) {
-      if (c === '"') {
-        if (inQuotes && current.endsWith('"')) {
-          current = current.slice(0,-1) + '"'; // Escaped quote
-        } else {
-          inQuotes = !inQuotes;
-          current += '"';
-        }
-      } else if (c === '\t' && !inQuotes) {
-        parts.push(current.replace(/^"|"$/g,'').replace(/""/g,'"'));
-        current = '';
-      } else {
-        current += c;
-      }
-    }
-    if (current.length>0) parts.push(current.replace(/^"|"$/g,'').replace(/""/g,'"'));
+    const raw = lines[i];
+    if (!raw.trim()) continue;
+    const parts = parseTsvLine(raw);
     if (parts.length < 3) continue;
 
     let [name, start, duration] = parts;
+    name = name || '';
+    start = start || '';
+    duration = duration || '';
+
     const parseTime = t => {
+      // Accept H:MM:SS.mmm or MM:SS.mmm or M:SS.mmm etc.
       const m = /(?:(\d+):)?(\d+):(\d+)\.(\d+)/.exec(t);
       if (!m) throw new Error('Bad time ' + t);
-      const hh = parseInt(m[1]||0), mm = parseInt(m[2]), ss = parseInt(m[3]), ms = parseInt(m[4]);
-      return hh*3600 + mm*60 + ss + ms/1000;
+      const hh = parseInt(m[1]||0, 10), mm = parseInt(m[2],10), ss = parseInt(m[3],10);
+      let ms = m[4] || '0';
+      // ensure milliseconds are 3 digits
+      if (ms.length < 3) ms = ms.padEnd(3, '0');
+      const msi = parseInt(ms, 10);
+      return hh*3600 + mm*60 + ss + msi/1000;
     };
+
     const s = parseTime(start);
     const d = parseTime(duration);
     const e = s + d;
+
     const clean = (name||'').replace(/\t/g,' ');
-    out.push([s.toFixed(6), e.toFixed(6), clean].join("\t"));
+    out.push([s.toFixed(6), e.toFixed(6), clean].join('\t'));
   }
-  return out.join("\n");
+  return out.join('\n');
 }
 
 // Download button with timestamp
