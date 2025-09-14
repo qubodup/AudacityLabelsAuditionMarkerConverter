@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Audacity Labels / Audition Markers Converter</title>
+  <style>
+    body { font-family: sans-serif; display: flex; gap: 20px; padding: 20px; }
+    .panel { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+    textarea { width: 100%; height: 300px; font-family: monospace; }
+    .info { font-weight: bold; }
+    .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+<h1>Audacity Labels / Audition Markers Converter</h1>
+<p>Note: only Decimal time format / Cue type Audition Marker format supported</p>
+  <div class="panel left">
+    <h3>Input</h3>
+    <textarea id="input"></textarea>
+    <input type="file" id="fileInput" accept=".txt,.csv,.tsv">
+    <div class="controls">
+      <button id="identifyBtn">Identify</button>
+      <label><input type="radio" name="target" value="audition"> Audacity → Audition</label>
+      <label><input type="radio" name="target" value="audacity"> Audition → Audacity</label>
+      <button id="convertBtn">Convert</button>
+    </div>
+    <div class="info" id="info"></div>
+  </div>
+
+  <div class="panel right">
+    <h3>Output</h3>
+    <textarea id="output" readonly></textarea>
+    <button id="downloadBtn">Download</button>
+  </div>
+
+<script>
+const inputEl = document.getElementById('input');
+const outputEl = document.getElementById('output');
+const infoEl = document.getElementById('info');
+const fileInput = document.getElementById('fileInput');
+let detectedFormat = null; // 'audacity' | 'audition'
+let convertedFormat = null; // 'audacity' | 'audition'
+
+// Drag & drop
+inputEl.addEventListener('dragover', e => e.preventDefault());
+inputEl.addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length > 0) {
+    readFile(e.dataTransfer.files[0]);
+  }
+});
+
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length > 0) readFile(e.target.files[0]);
+});
+
+function readFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    inputEl.value = reader.result;
+    identify(true);
+  };
+  reader.readAsText(file);
+}
+
+function identify(autoSelectRadio=false) {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  if (text.startsWith('Name\tStart\tDuration')) {
+    detectedFormat = 'audition';
+  } else {
+    detectedFormat = 'audacity';
+  }
+  infoEl.style.color = 'black';
+  infoEl.textContent = 'Identified as ' + detectedFormat;
+  if (autoSelectRadio) {
+    const val = detectedFormat === 'audacity' ? 'audition' : 'audacity';
+    document.querySelector(`input[name="target"][value="${val}"]`).checked = true;
+  }
+}
+
+document.getElementById('identifyBtn').addEventListener('click', () => identify(false));
+
+document.getElementById('convertBtn').addEventListener('click', () => {
+  const text = inputEl.value.trim();
+  if (!text) { infoEl.style.color='red'; infoEl.textContent = 'No input.'; return; }
+  if (!detectedFormat) identify();
+  if (!detectedFormat) { infoEl.style.color='red'; infoEl.textContent = 'Could not detect format.'; return; }
+
+  const target = document.querySelector('input[name="target"]:checked');
+  if (!target) { infoEl.style.color='red'; infoEl.textContent = 'Select target format.'; return; }
+  try {
+    let result;
+    if (detectedFormat === target.value) {
+      infoEl.style.color='red';
+      infoEl.textContent = 'Source and target format are the same.';
+      return;
+    }
+    if (detectedFormat === 'audacity' && target.value === 'audition') {
+      result = audacityToAudition(text);
+    } else if (detectedFormat === 'audition' && target.value === 'audacity') {
+      result = auditionToAudacity(text);
+    }
+    outputEl.value = result;
+    convertedFormat = target.value;
+    infoEl.style.color = 'green';
+    infoEl.textContent = 'Conversion successful (' + convertedFormat + ').';
+  } catch (err) {
+    outputEl.value = '';
+    convertedFormat = null;
+    infoEl.style.color = 'red';
+    infoEl.textContent = 'Conversion failed: ' + err.message;
+  }
+});
+
+function audacityToAudition(txt) {
+  const lines = txt.split(/\r?\n/).filter(l => l.trim());
+  const out = ["Name\tStart\tDuration\tTime Format\tType\tDescription"];
+  for (let line of lines) {
+    const [start, end, label=""] = line.split("\t");
+    const s = parseFloat(start);
+    const e = parseFloat(end);
+    if (isNaN(s) || isNaN(e)) throw new Error('Invalid timestamps');
+    const duration = e - s;
+    const fmtTime = sec => {
+      const ms = Math.round(sec * 1000);
+      const hh = Math.floor(ms/3600000);
+      const mm = Math.floor((ms%3600000)/60000);
+      const ss = Math.floor((ms%60000)/1000);
+      const mmm = ms%1000;
+      return `${hh>0?hh+':':''}${mm.toString().padStart(2,'0')}:${ss.toString().padStart(2,'0')}.${mmm.toString().padStart(3,'0')}`;
+    };
+    const esc = str => '"' + str.replace(/"/g,'""') + '"';
+    out.push([esc(label), fmtTime(s), fmtTime(duration), 'decimal', 'Cue', ''].join("\t"));
+  }
+  return out.join("\n");
+}
+
+function auditionToAudacity(txt) {
+  const lines = txt.split(/\r?\n/).filter(l => l.trim());
+  if (!lines[0].startsWith('Name\tStart')) throw new Error('Not an Audition TSV');
+  const out = [];
+  for (let i=1; i<lines.length; i++) {
+    // Handle quoted fields properly (TSV with quotes)
+    let parts = [];
+    let current = '';
+    let inQuotes = false;
+    for (let c of lines[i]) {
+      if (c === '"') {
+        if (inQuotes && current.endsWith('"')) {
+          current = current.slice(0,-1) + '"'; // Escaped quote
+        } else {
+          inQuotes = !inQuotes;
+          current += '"';
+        }
+      } else if (c === '\t' && !inQuotes) {
+        parts.push(current.replace(/^"|"$/g,'').replace(/""/g,'"'));
+        current = '';
+      } else {
+        current += c;
+      }
+    }
+    if (current.length>0) parts.push(current.replace(/^"|"$/g,'').replace(/""/g,'"'));
+    if (parts.length < 3) continue;
+
+    let [name, start, duration] = parts;
+    const parseTime = t => {
+      const m = /(?:(\d+):)?(\d+):(\d+)\.(\d+)/.exec(t);
+      if (!m) throw new Error('Bad time ' + t);
+      const hh = parseInt(m[1]||0), mm = parseInt(m[2]), ss = parseInt(m[3]), ms = parseInt(m[4]);
+      return hh*3600 + mm*60 + ss + ms/1000;
+    };
+    const s = parseTime(start);
+    const d = parseTime(duration);
+    const e = s + d;
+    const clean = (name||'').replace(/\t/g,' ');
+    out.push([s.toFixed(6), e.toFixed(6), clean].join("\t"));
+  }
+  return out.join("\n");
+}
+
+// Download button with timestamp
+ document.getElementById('downloadBtn').addEventListener('click', () => {
+  if (!outputEl.value || !convertedFormat) { infoEl.style.color='red'; infoEl.textContent = 'Nothing to download.'; return; }
+  const blob = new Blob([outputEl.value], {type: 'text/plain'});
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().replace(/[:.]/g,'-');
+  const fname = convertedFormat === 'audacity' ? `labels_${ts}.txt` : `markers_${ts}.csv`;
+  a.href = URL.createObjectURL(blob);
+  a.download = fname;
+  a.click();
+});
+</script>
+</body>
+</html>
