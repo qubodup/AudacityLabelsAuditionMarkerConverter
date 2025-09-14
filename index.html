@@ -4,16 +4,37 @@
   <meta charset="UTF-8">
   <title>Audacity Labels / Audition Markers Converter</title>
   <style>
-    body { font-family: sans-serif; display: flex; gap: 20px; padding: 20px; }
-    .panel { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+    body {
+			font-family: sans-serif;
+			padding: 20px;
+		}
+
+		.top {
+			margin-bottom: 20px; /* space between header and panels */
+		}
+
+		.main {
+			display: flex;
+			gap: 20px;
+		}
+
+		.panel {
+			flex: 1;
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+	  }
     textarea { width: 100%; height: 300px; font-family: monospace; }
     .info { font-weight: bold; }
     .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   </style>
 </head>
 <body>
-<h1>Audacity Labels / Audition Markers Converter</h1>
-<p>Note: only Decimal time format / Cue type Audition Marker format supported</p>
+  <div class="top">
+    <h1>Audacity Labels / Audition Markers Converter</h1>
+    <p>Note: only Decimal time format / Cue type Audition Marker format supported</p>
+  </div>
+	<div class="main">
   <div class="panel left">
     <h3>Input</h3>
     <textarea id="input"></textarea>
@@ -31,6 +52,7 @@
     <h3>Output</h3>
     <textarea id="output" readonly></textarea>
     <button id="downloadBtn">Download</button>
+  </div>
   </div>
 
 <script>
